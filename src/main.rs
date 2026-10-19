@@ -856,7 +856,6 @@ impl eframe::App for NetProbeApp {
                     egui::vec2(300.0, ui.available_height()),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                    section_title(ui, "基本信息");
                     egui::Frame::default()
                         .inner_margin(egui::Margin {
                             left: 12.0,
@@ -866,6 +865,10 @@ impl eframe::App for NetProbeApp {
                         })
                         .show(ui, |ui| {
                     ui.set_min_width(276.0);
+                    // 本节统一宽度：标题栏与所有输入框/下拉框严格等宽，不随内容变化
+                    let fw = ui.available_width();
+                    section_title(ui, "基本信息", fw);
+                    ui.add_space(4.0);
                     // 连接后锁定连接参数，断开后才可编辑。
                     // 注意：egui 的 set_enabled 只能禁用不能重新启用，
                     // 所以「发送目标」这类运行期控件绝不能包进禁用块，否则会被一起锁死。
@@ -873,26 +876,27 @@ impl eframe::App for NetProbeApp {
                         SessionParams::TcpClient(c) => {
                             ui.add_enabled_ui(!is_running, |ui| {
                                 ui.label("目标IP");
-                                dirty |= ip_text_edit(ui, &mut c.remote_host).changed();
+                                dirty |= ip_text_edit(ui, &mut c.remote_host, fw).changed();
                                 ui.label("目标端口");
-                                dirty |= edit_port(ui, &mut c.remote_port);
+                                dirty |= edit_port_width(ui, &mut c.remote_port, fw);
                                 refresh_ips |= ip_field(
                                     ui,
                                     "tc-localip",
                                     "本地IP",
                                     &mut c.local_host,
                                     &ip_addrs,
+                                    fw,
                                     &mut dirty,
                                 );
                                 ui.label("本地端口");
                                 dirty |= edit_port_hint(
                                     ui,
                                     &mut c.local_port,
-                                    ui.available_width(),
+                                    fw,
                                     "使用随机端口",
                                 );
                                 ui.label("超时时间(秒)");
-                                dirty |= edit_secs(ui, &mut c.connect_timeout_secs);
+                                dirty |= edit_secs(ui, &mut c.connect_timeout_secs, fw);
                                 ui.horizontal(|ui| {
                                     dirty |=
                                         ui.checkbox(&mut c.auto_reconnect, "自动连接").changed();
@@ -918,10 +922,11 @@ impl eframe::App for NetProbeApp {
                                     "监听地址",
                                     &mut c.listen_host,
                                     &ip_addrs,
+                                    fw,
                                     &mut dirty,
                                 );
                                 ui.label("监听端口");
-                                dirty |= edit_port(ui, &mut c.listen_port);
+                                dirty |= edit_port_width(ui, &mut c.listen_port, fw);
                             });
                             ui.add_space(4.0);
                             // 选定发送对象是运行期操作，始终保持可用
@@ -931,7 +936,8 @@ impl eframe::App for NetProbeApp {
                             let sel_text = &items[st.client_sel.min(items.len() - 1)];
                             egui::ComboBox::from_id_salt("srv_target")
                                 .selected_text(sel_text.clone())
-                                .width(ui.available_width())
+                                .width(fw)
+                                .wrap_mode(egui::TextWrapMode::Truncate)
                                 .show_ui(ui, |ui| {
                                     for (i, item) in items.iter().enumerate() {
                                         ui.selectable_value(&mut st.client_sel, i, item.clone());
@@ -951,36 +957,38 @@ impl eframe::App for NetProbeApp {
                                     "本地IP",
                                     &mut c.local_host,
                                     &ip_addrs,
+                                    fw,
                                     &mut dirty,
                                 );
                                 ui.label("本地端口");
                                 dirty |= edit_port_hint(
                                     ui,
                                     &mut c.local_port,
-                                    ui.available_width(),
+                                    fw,
                                     "使用随机端口",
                                 );
                                 dirty |= ui.checkbox(&mut c.has_remote, "指定对端").changed();
                                 ui.add_enabled_ui(c.has_remote, |ui| {
                                     ui.label("目标IP");
-                                    dirty |= ip_text_edit(ui, &mut c.remote_host).changed();
+                                    dirty |= ip_text_edit(ui, &mut c.remote_host, fw).changed();
                                     ui.label("目标端口");
-                                    dirty |= edit_port(ui, &mut c.remote_port);
+                                    dirty |= edit_port_width(ui, &mut c.remote_port, fw);
                                 });
                             });
                         }
                         SessionParams::UdpMulticast(c) => {
                             ui.add_enabled_ui(!is_running, |ui| {
                                 ui.label("组地址");
-                                dirty |= ip_text_edit(ui, &mut c.group).changed();
+                                dirty |= ip_text_edit(ui, &mut c.group, fw).changed();
                                 ui.label("组端口");
-                                dirty |= edit_port(ui, &mut c.port);
+                                dirty |= edit_port_width(ui, &mut c.port, fw);
                                 refresh_ips |= ip_field(
                                     ui,
                                     "mc-iface",
                                     "网卡",
                                     &mut c.iface,
                                     &ip_addrs,
+                                    fw,
                                     &mut dirty,
                                 );
                                 ui.horizontal(|ui| {
@@ -1012,7 +1020,6 @@ impl eframe::App for NetProbeApp {
                     });
                         });
                     ui.add_space(8.0);
-                    section_title(ui, "计数信息");
                     egui::Frame::default()
                         .inner_margin(egui::Margin {
                             left: 12.0,
@@ -1022,6 +1029,9 @@ impl eframe::App for NetProbeApp {
                         })
                         .show(ui, |ui| {
                     ui.set_min_width(276.0);
+                    let fw = ui.available_width();
+                    section_title(ui, "计数信息", fw);
+                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.label("发送");
                         readonly_box(ui, &st.tx_bytes.to_string(), 90.0);
@@ -1626,10 +1636,6 @@ impl NetProbeApp {
     }
 }
 
-fn edit_port(ui: &mut egui::Ui, port: &mut u16) -> bool {
-    edit_port_width(ui, port, ui.available_width())
-}
-
 /// 端口输入框：与 IP 输入框同宽同高，文字垂直居中
 fn edit_port_width(ui: &mut egui::Ui, port: &mut u16, width: f32) -> bool {
     edit_port_hint(ui, port, width, "")
@@ -1704,8 +1710,7 @@ fn readonly_box(ui: &mut egui::Ui, text: &str, width: f32) {
 }
 
 /// 分组标题：整行底色，文字垂直居中
-fn section_title(ui: &mut egui::Ui, text: &str) {
-    let width = ui.available_width();
+fn section_title(ui: &mut egui::Ui, text: &str, width: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
     ui.painter()
         .rect_filled(rect, 4.0, Color32::from_rgb(228, 233, 241));
@@ -1841,13 +1846,17 @@ fn delete_button(ui: &mut egui::Ui, text: &str) -> bool {
 
 /// IP 输入框：把全角字符归一化为半角，修复中文输入法下无法输入小数点的问题
 /// （rime 等输入法按"."输出的是全角「．」「。」，直接写入地址无法解析）
-fn ip_text_edit<'a>(ui: &mut egui::Ui, text: &'a mut String) -> egui::Response {
-    ip_text_edit_hint(ui, text, "")
+fn ip_text_edit<'a>(ui: &mut egui::Ui, text: &'a mut String, width: f32) -> egui::Response {
+    ip_text_edit_hint(ui, text, width, "")
 }
 
-fn ip_text_edit_hint<'a>(ui: &mut egui::Ui, text: &'a mut String, hint: &'a str) -> egui::Response {
-    let w = ui.available_width();
-    let mut resp = ui.add(field_edit(text, w, hint));
+fn ip_text_edit_hint<'a>(
+    ui: &mut egui::Ui,
+    text: &'a mut String,
+    width: f32,
+    hint: &'a str,
+) -> egui::Response {
+    let mut resp = ui.add(field_edit(text, width, hint));
     if resp.changed() && text.chars().any(|ch| {
         matches!(ch, '．' | '。' | '，' | '：') || ('\u{FF10}'..='\u{FF19}').contains(&ch)
     }) {
@@ -1895,9 +1904,8 @@ fn remap_hex_cursor(ctx: &egui::Context, id: egui::Id, old: &str) {
 }
 
 /// 秒数输入框：与端口/IP 输入框同宽同高（名字在上，框占满列宽），空值记 0（连接时按 1 秒兜底）
-fn edit_secs(ui: &mut egui::Ui, secs: &mut u32) -> bool {
-    let w = ui.available_width();
-    edit_uint(ui, secs, w, 120, "默认 3")
+fn edit_secs(ui: &mut egui::Ui, secs: &mut u32, width: f32) -> bool {
+    edit_uint(ui, secs, width, 120, "默认 3")
 }
 
 /// 会话页的「本地IP / 网卡 / 监听地址」字段。
@@ -1909,11 +1917,11 @@ fn ip_field(
     label: &str,
     value: &mut String,
     addrs: &[(String, String)],
+    width: f32,
     changed: &mut bool,
 ) -> bool {
     ui.label(label);
-    let outer_w = ui.available_width();
-    ip_row(ui, salt, value, addrs, outer_w, changed)
+    ip_row(ui, salt, value, addrs, width, changed)
 }
 
 /// 创建对话框：同上，宽度固定为 DLG_FIELD_W，与其它输入框右边界对齐
@@ -1941,7 +1949,16 @@ fn ip_row(
     ui.horizontal(|ui| {
         let gap = ui.spacing().item_spacing.x;
         let combo_w = (outer_w - ICON_BTN_W - gap).max(60.0);
-        *changed |= ip_combo(ui, salt, value, addrs, combo_w);
+        // 关键：ComboBox 的非 Extend 模式是按「可用宽度」而不是 width() 决定截断点，
+        // 因此必须用固定尺寸的子区域把可用宽度也约束住，否则长文本仍会把下拉框撑宽。
+        ui.allocate_ui_with_layout(
+            egui::vec2(combo_w, 28.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_max_width(combo_w);
+                *changed |= ip_combo(ui, salt, value, addrs, combo_w);
+            },
+        );
         if refresh_icon_button(ui) {
             refresh = true;
         }
@@ -1975,9 +1992,13 @@ fn ip_combo(
     };
 
     let mut pick: Option<String> = None;
-    egui::ComboBox::from_id_salt(salt)
-        .selected_text(selected_text)
+    let response = egui::ComboBox::from_id_salt(salt)
+        .selected_text(selected_text.clone())
         .width(w)
+        // 关键：默认 Extend 会按选中文字长度把下拉框横向撑开（实测能撑宽 14px 以上），
+        // 一旦超出所在列宽就会把容器撑大，导致其后所有控件宽度依次变大。
+        // 截断 + 悬停提示完整内容，保证宽度恒定。
+        .wrap_mode(egui::TextWrapMode::Truncate)
         .show_ui(ui, |ui| {
             let any_sel = current.is_empty() || current == "0.0.0.0";
             if ui
@@ -2004,7 +2025,9 @@ fn ip_combo(
                     pick = Some(current.clone());
                 }
             }
-        });
+        })
+        .response;
+    response.on_hover_text(selected_text);
 
     if let Some(v) = pick {
         if *value != v {
