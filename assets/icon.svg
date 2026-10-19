@@ -1,0 +1,21 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="url(#bg)"/>
+  <!-- 发送：向右的箭头 + 对端节点 -->
+  <g stroke="#FFFFFF" stroke-width="34" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M136 190 H 288"/>
+    <path d="M260 154 L 312 190 L 260 226"/>
+  </g>
+  <circle cx="386" cy="190" r="20" fill="#FFFFFF"/>
+  <!-- 接收：向左的箭头 + 来源节点 -->
+  <g stroke="#FFFFFF" stroke-width="34" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.78">
+    <path d="M376 330 H 224"/>
+    <path d="M252 294 L 200 330 L 252 366"/>
+  </g>
+  <circle cx="126" cy="330" r="20" fill="#FFFFFF" opacity="0.78"/>
+</svg>

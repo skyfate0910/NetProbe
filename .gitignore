@@ -1,0 +1,13 @@
+# 编译产物与打包输出
+/target
+/dist
+
+# 运行时生成的配置（默认位置 ~/.config/netprobe/，这些是工作目录回退名）
+/netprobe_config.json
+/netdugger_config.json
+
+# 接收区导出的快照
+/netprobe_recv_*.txt
+
+# 内部实现计划，仅本地保留
+/PLAN.md
