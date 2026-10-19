@@ -196,6 +196,8 @@ struct NetProbeApp {
     ip_addrs_at: Instant,
     /// 左侧分组展开状态：0=客户端模式，1=服务器模式（false=展开）
     groups_collapsed: [bool; 2],
+    /// 是否显示「关于」窗口
+    show_about: bool,
 }
 
 impl NetProbeApp {
@@ -298,6 +300,7 @@ impl NetProbeApp {
             ip_addrs: session::local_ipv4_addrs(),
             ip_addrs_at: Instant::now(),
             groups_collapsed: [false, false],
+            show_about: false,
         }
     }
 
@@ -476,6 +479,49 @@ impl NetProbeApp {
         }
     }
 
+    /// 新开一个独立窗口：以相同参数再启动一份本程序。
+    /// 多实例各自持有会话运行时，互不影响（配置文件为共享，见 README 说明）。
+    fn show_about_window(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        egui::Window::new("关于 NetProbe")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(RichText::new("NetProbe").strong().size(18.0));
+                ui.label(
+                    RichText::new(format!("版本 {}", env!("CARGO_PKG_VERSION"))).weak(),
+                );
+                ui.add_space(6.0);
+                ui.label("TCP/UDP 网络调试助手：TCP 客户端、TCP 服务器、UDP 单播、UDP 组播。");
+                ui.label("支持文本/十六进制收发、定时发送、断线重连、收发统计与配置持久化。");
+                ui.add_space(6.0);
+                ui.label(RichText::new("多窗口：可从「菜单 → 打开新窗口」再开一份，各窗口独立运行。").weak().small());
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if blue_button(ui, "确定") {
+                            self.show_about = false;
+                        }
+                    });
+                });
+            });
+        if !open {
+            self.show_about = false;
+        }
+    }
+
+    fn open_new_window(&mut self) {
+        match std::env::current_exe() {
+            Ok(exe) => match std::process::Command::new(&exe).spawn() {
+                Ok(child) => self.status = format!("已打开新窗口（PID {}）", child.id()),
+                Err(e) => self.status = format!("打开新窗口失败: {e}"),
+            },
+            Err(e) => self.status = format!("无法定位程序路径: {e}"),
+        }
+    }
+
     /// 重新读取本机网卡地址（启动时、定时、点「刷新」时调用）
     fn refresh_ip_addrs(&mut self) {
         self.ip_addrs = session::local_ipv4_addrs();
@@ -592,41 +638,62 @@ impl eframe::App for NetProbeApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("NetProbe").strong().size(16.0));
-                ui.separator();
-                if blue_button(ui, "创建客户端") {
+                ui.add_space(6.0);
+
+                if tool_button(ui, true, "创建客户端", tool_icon_client, false) {
                     self.dialog = CreateDialog {
                         mode: Some(CreateMode::Client),
                         kind: 0,
                         ..CreateDialog::default()
                     };
                 }
-                if blue_button(ui, "创建服务器") {
+                if tool_button(ui, true, "创建服务器", tool_icon_server, false) {
                     self.dialog = CreateDialog {
                         mode: Some(CreateMode::Server),
                         kind: 0,
                         ..CreateDialog::default()
                     };
                 }
-                ui.separator();
+
+                ui.add_space(10.0);
+
                 let any_pending = self
                     .config
                     .sessions
                     .iter()
                     .any(|s| !self.runtimes.contains_key(&s.id));
-                ui.add_enabled_ui(any_pending, |ui| {
-                    if blue_button(ui, "全部连接") {
-                        connect_all = true;
-                    }
-                });
-                ui.add_enabled_ui(!self.runtimes.is_empty(), |ui| {
-                    if blue_button(ui, "全部断开") {
-                        disconnect_all = true;
-                    }
-                });
+                if tool_button(ui, any_pending, "全部连接", tool_icon_link, false) {
+                    connect_all = true;
+                }
+                if tool_button(
+                    ui,
+                    !self.runtimes.is_empty(),
+                    "全部断开",
+                    tool_icon_unlink,
+                    false,
+                ) {
+                    disconnect_all = true;
+                }
                 let has_sel = self.config.selected.is_some();
-                ui.add_enabled_ui(has_sel, |ui| {
-                    if delete_button(ui, "删除") {
-                        delete_selected = true;
+                if tool_button(ui, has_sel, "删除", tool_icon_trash, true) {
+                    delete_selected = true;
+                }
+
+                // 「更多」紧跟在「删除」右侧，箭头与分组标题同款
+                ui.add_space(6.0);
+                custom_menu_button(ui, more_menu_button, |ui| {
+                    if ui.button("打开新窗口").clicked() {
+                        self.open_new_window();
+                        ui.close_menu();
+                    }
+                    if ui.button("刷新网卡列表").clicked() {
+                        refresh_ips = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("关于 NetProbe").clicked() {
+                        self.show_about = true;
+                        ui.close_menu();
                     }
                 });
             });
@@ -773,7 +840,11 @@ impl eframe::App for NetProbeApp {
                         .small(),
                 );
                 if is_running {
-                    ui.label(RichText::new("● 运行中").color(Color32::from_rgb(20, 140, 60)).small());
+                    ui.label(
+                        RichText::new("● 运行中（参数已锁定，断开后可编辑）")
+                            .color(Color32::from_rgb(20, 140, 60))
+                            .small(),
+                    );
                 }
             });
             ui.separator();
@@ -795,58 +866,65 @@ impl eframe::App for NetProbeApp {
                         })
                         .show(ui, |ui| {
                     ui.set_min_width(276.0);
+                    // 连接后锁定连接参数，断开后才可编辑。
+                    // 注意：egui 的 set_enabled 只能禁用不能重新启用，
+                    // 所以「发送目标」这类运行期控件绝不能包进禁用块，否则会被一起锁死。
                     match &mut session.params {
                         SessionParams::TcpClient(c) => {
-                            ui.label("目标IP");
-                            dirty |= ip_text_edit(ui, &mut c.remote_host).changed();
-                            ui.label("目标端口");
-                            dirty |= edit_port(ui, &mut c.remote_port);
-                            refresh_ips |= ip_field(
-                            ui,
-                            "tc-localip",
-                            "本地IP",
-                            &mut c.local_host,
-                            &ip_addrs,
-                            &mut dirty,
-                        );
-                            ui.label("本地端口");
-                            dirty |= edit_port_hint(
-                                ui,
-                                &mut c.local_port,
-                                ui.available_width(),
-                                "使用随机端口",
-                            );
-                            ui.label("超时时间(秒)");
-                            dirty |= edit_secs(ui, &mut c.connect_timeout_secs);
-                            ui.horizontal(|ui| {
-                                dirty |= ui.checkbox(&mut c.auto_reconnect, "自动连接").changed();
-                                ui.label("每隔");
-                                dirty |= ui
-                                    .add(
-                                        egui::DragValue::new(&mut c.reconnect_secs)
-                                            .range(1..=3600)
-                                            .suffix(" s"),
-                                    )
-                                    .changed();
+                            ui.add_enabled_ui(!is_running, |ui| {
+                                ui.label("目标IP");
+                                dirty |= ip_text_edit(ui, &mut c.remote_host).changed();
+                                ui.label("目标端口");
+                                dirty |= edit_port(ui, &mut c.remote_port);
+                                refresh_ips |= ip_field(
+                                    ui,
+                                    "tc-localip",
+                                    "本地IP",
+                                    &mut c.local_host,
+                                    &ip_addrs,
+                                    &mut dirty,
+                                );
+                                ui.label("本地端口");
+                                dirty |= edit_port_hint(
+                                    ui,
+                                    &mut c.local_port,
+                                    ui.available_width(),
+                                    "使用随机端口",
+                                );
+                                ui.label("超时时间(秒)");
+                                dirty |= edit_secs(ui, &mut c.connect_timeout_secs);
+                                ui.horizontal(|ui| {
+                                    dirty |=
+                                        ui.checkbox(&mut c.auto_reconnect, "自动连接").changed();
+                                    ui.label("每隔");
+                                    dirty |= ui
+                                        .add(
+                                            egui::DragValue::new(&mut c.reconnect_secs)
+                                                .range(1..=3600)
+                                                .suffix(" s"),
+                                        )
+                                        .changed();
+                                });
+                                ui.label(
+                                    RichText::new("断开后自动重连，间隔可调").weak().small(),
+                                );
                             });
-                            ui.label(
-                                RichText::new("断开后自动重连，间隔可调")
-                                    .weak()
-                                    .small(),
-                            );
                         }
                         SessionParams::TcpServer(c) => {
-                            refresh_ips |= ip_field(
-                            ui,
-                            "ts-listen",
-                            "监听地址",
-                            &mut c.listen_host,
-                            &ip_addrs,
-                            &mut dirty,
-                        );
-                            ui.label("监听端口");
-                            dirty |= edit_port(ui, &mut c.listen_port);
+                            ui.add_enabled_ui(!is_running, |ui| {
+                                refresh_ips |= ip_field(
+                                    ui,
+                                    "ts-listen",
+                                    "监听地址",
+                                    &mut c.listen_host,
+                                    &ip_addrs,
+                                    &mut dirty,
+                                );
+                                ui.label("监听端口");
+                                dirty |= edit_port(ui, &mut c.listen_port);
+                            });
                             ui.add_space(4.0);
+                            // 选定发送对象是运行期操作，始终保持可用
                             ui.label(RichText::new("发送目标").strong());
                             let mut items: Vec<String> = vec!["全部客户端".into()];
                             items.extend(st.clients.iter().cloned());
@@ -860,52 +938,58 @@ impl eframe::App for NetProbeApp {
                                     }
                                 });
                             ui.label(
-                                RichText::new(format!("在线客户端: {}", st.clients.len())).weak().small(),
+                                RichText::new(format!("在线客户端: {}", st.clients.len()))
+                                    .weak()
+                                    .small(),
                             );
                         }
                         SessionParams::UdpUnicast(c) => {
-                            refresh_ips |= ip_field(
-                            ui,
-                            "uc-localip",
-                            "本地IP",
-                            &mut c.local_host,
-                            &ip_addrs,
-                            &mut dirty,
-                        );
-                            ui.label("本地端口");
-                            dirty |= edit_port_hint(
-                                ui,
-                                &mut c.local_port,
-                                ui.available_width(),
-                                "使用随机端口",
-                            );
-                            dirty |= ui.checkbox(&mut c.has_remote, "指定对端").changed();
-                            ui.add_enabled_ui(c.has_remote, |ui| {
-                                ui.label("目标IP");
-                                dirty |= ip_text_edit(ui, &mut c.remote_host).changed();
-                                ui.label("目标端口");
-                                dirty |= edit_port(ui, &mut c.remote_port);
+                            ui.add_enabled_ui(!is_running, |ui| {
+                                refresh_ips |= ip_field(
+                                    ui,
+                                    "uc-localip",
+                                    "本地IP",
+                                    &mut c.local_host,
+                                    &ip_addrs,
+                                    &mut dirty,
+                                );
+                                ui.label("本地端口");
+                                dirty |= edit_port_hint(
+                                    ui,
+                                    &mut c.local_port,
+                                    ui.available_width(),
+                                    "使用随机端口",
+                                );
+                                dirty |= ui.checkbox(&mut c.has_remote, "指定对端").changed();
+                                ui.add_enabled_ui(c.has_remote, |ui| {
+                                    ui.label("目标IP");
+                                    dirty |= ip_text_edit(ui, &mut c.remote_host).changed();
+                                    ui.label("目标端口");
+                                    dirty |= edit_port(ui, &mut c.remote_port);
+                                });
                             });
                         }
                         SessionParams::UdpMulticast(c) => {
-                            ui.label("组地址");
-                            dirty |= ip_text_edit(ui, &mut c.group).changed();
-                            ui.label("组端口");
-                            dirty |= edit_port(ui, &mut c.port);
-                            refresh_ips |= ip_field(
-                            ui,
-                            "mc-iface",
-                            "网卡",
-                            &mut c.iface,
-                            &ip_addrs,
-                            &mut dirty,
-                        );
-                            ui.horizontal(|ui| {
-                                ui.label("TTL");
-                                dirty |= ui
-                                    .add(egui::DragValue::new(&mut c.ttl).range(0..=255))
-                                    .changed();
-                                dirty |= ui.checkbox(&mut c.loopback, "本机回环").changed();
+                            ui.add_enabled_ui(!is_running, |ui| {
+                                ui.label("组地址");
+                                dirty |= ip_text_edit(ui, &mut c.group).changed();
+                                ui.label("组端口");
+                                dirty |= edit_port(ui, &mut c.port);
+                                refresh_ips |= ip_field(
+                                    ui,
+                                    "mc-iface",
+                                    "网卡",
+                                    &mut c.iface,
+                                    &ip_addrs,
+                                    &mut dirty,
+                                );
+                                ui.horizontal(|ui| {
+                                    ui.label("TTL");
+                                    dirty |= ui
+                                        .add(egui::DragValue::new(&mut c.ttl).range(0..=255))
+                                        .changed();
+                                    dirty |= ui.checkbox(&mut c.loopback, "本机回环").changed();
+                                });
                             });
                         }
                     }
@@ -1141,6 +1225,9 @@ impl eframe::App for NetProbeApp {
             self.show_create_dialog(ctx);
         }
         self.show_file_dialogs(ctx);
+        if self.show_about {
+            self.show_about_window(ctx);
+        }
 
         // 执行动作
         if let Some(id) = &selected_id {
@@ -1686,23 +1773,14 @@ fn group_header(ui: &mut egui::Ui, text: &str, collapsed: bool) -> bool {
         .min;
     ui.painter().galley(pos, galley, Color32::BLACK);
 
-    // 右侧箭头：收缩为 > 形，展开为 v 形
-    let c = egui::pos2(rect.right() - 15.0, rect.center().y);
-    let r = 4.5;
-    let stroke = egui::Stroke::new(2.0_f32, Color32::from_rgb(85, 85, 85));
-    if collapsed {
-        let a = egui::pos2(c.x - r * 0.6, c.y - r);
-        let b = egui::pos2(c.x + r * 0.6, c.y);
-        let d = egui::pos2(c.x - r * 0.6, c.y + r);
-        ui.painter().line_segment([a, b], stroke);
-        ui.painter().line_segment([b, d], stroke);
-    } else {
-        let a = egui::pos2(c.x - r, c.y - r * 0.6);
-        let b = egui::pos2(c.x, c.y + r * 0.6);
-        let d = egui::pos2(c.x + r, c.y - r * 0.6);
-        ui.painter().line_segment([a, b], stroke);
-        ui.painter().line_segment([b, d], stroke);
-    }
+    // 右侧箭头：收缩为 > 形，展开为 v 形（与「更多」按钮同一形状）
+    draw_chevron(
+        ui.painter(),
+        egui::pos2(rect.right() - 15.0, rect.center().y),
+        4.5,
+        collapsed,
+        Color32::from_rgb(85, 85, 85),
+    );
 
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1984,4 +2062,310 @@ fn refresh_icon_button(ui: &mut egui::Ui) -> bool {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     response.clicked()
+}
+
+// ---------------- 工具栏：扁平「图标 + 文字」按钮 ----------------
+
+/// 图标绘制函数：在给定 16×16 区域内手绘，不依赖字体字形
+type ToolIcon = fn(&egui::Painter, egui::Rect, Color32);
+
+fn tool_icon_client(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = egui::Stroke::new(1.6_f32, c);
+    // 显示器（客户端终端）
+    let body = egui::Rect::from_min_max(
+        egui::pos2(r.left() + 1.0, r.top() + 2.0),
+        egui::pos2(r.right() - 1.0, r.bottom() - 4.5),
+    );
+    p.rect_stroke(body, 2.0, s);
+    // 底座
+    p.line_segment(
+        [
+            egui::pos2(r.center().x - 3.5, r.bottom() - 1.5),
+            egui::pos2(r.center().x + 3.5, r.bottom() - 1.5),
+        ],
+        s,
+    );
+    p.line_segment(
+        [
+            egui::pos2(r.center().x, body.bottom()),
+            egui::pos2(r.center().x, r.bottom() - 1.5),
+        ],
+        s,
+    );
+}
+
+fn tool_icon_server(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = egui::Stroke::new(1.5_f32, c);
+    // 三层机架
+    for i in 0..3 {
+        let y = r.top() + 2.0 + i as f32 * 4.6;
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(r.left() + 1.5, y),
+            egui::pos2(r.right() - 1.5, y + 3.2),
+        );
+        p.rect_stroke(bar, 1.0, s);
+    }
+}
+
+fn tool_icon_link(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = egui::Stroke::new(1.6_f32, c);
+    let cy = r.center().y;
+    let cx = r.center().x;
+    // 相向的两个箭头 → ←
+    p.line_segment([egui::pos2(r.left() + 1.0, cy), egui::pos2(cx - 5.0, cy)], s);
+    p.line_segment([egui::pos2(r.right() - 1.0, cy), egui::pos2(cx + 5.0, cy)], s);
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(cx - 0.5, cy),
+            egui::pos2(cx - 5.5, cy - 3.4),
+            egui::pos2(cx - 5.5, cy + 3.4),
+        ],
+        c,
+        egui::Stroke::NONE,
+    ));
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(cx + 0.5, cy),
+            egui::pos2(cx + 5.5, cy - 3.4),
+            egui::pos2(cx + 5.5, cy + 3.4),
+        ],
+        c,
+        egui::Stroke::NONE,
+    ));
+}
+
+fn tool_icon_unlink(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = egui::Stroke::new(1.6_f32, c);
+    let cy = r.center().y;
+    let cx = r.center().x;
+    // 相背的两个箭头 ← →，中间留缺口表示断开
+    p.line_segment([egui::pos2(r.left() + 1.0, cy), egui::pos2(cx - 4.5, cy)], s);
+    p.line_segment([egui::pos2(r.right() - 1.0, cy), egui::pos2(cx + 4.5, cy)], s);
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(r.left() + 0.5, cy),
+            egui::pos2(r.left() + 5.5, cy - 3.4),
+            egui::pos2(r.left() + 5.5, cy + 3.4),
+        ],
+        c,
+        egui::Stroke::NONE,
+    ));
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(r.right() - 0.5, cy),
+            egui::pos2(r.right() - 5.5, cy - 3.4),
+            egui::pos2(r.right() - 5.5, cy + 3.4),
+        ],
+        c,
+        egui::Stroke::NONE,
+    ));
+}
+
+fn tool_icon_trash(p: &egui::Painter, r: egui::Rect, c: Color32) {
+    let s = egui::Stroke::new(1.5_f32, c);
+    let cx = r.center().x;
+    let top = r.top() + 1.0;
+    let bottom = r.bottom() - 1.0;
+    // 盖
+    p.line_segment(
+        [egui::pos2(cx - 5.0, top + 3.5), egui::pos2(cx + 5.0, top + 3.5)],
+        s,
+    );
+    // 提手
+    p.line_segment(
+        [
+            egui::pos2(cx - 2.2, top + 3.5),
+            egui::pos2(cx - 2.2, top + 1.2),
+        ],
+        s,
+    );
+    p.line_segment(
+        [
+            egui::pos2(cx + 2.2, top + 3.5),
+            egui::pos2(cx + 2.2, top + 1.2),
+        ],
+        s,
+    );
+    p.line_segment(
+        [
+            egui::pos2(cx - 2.2, top + 1.2),
+            egui::pos2(cx + 2.2, top + 1.2),
+        ],
+        s,
+    );
+    // 桶身
+    p.line_segment(
+        [egui::pos2(cx - 4.0, top + 3.5), egui::pos2(cx - 3.2, bottom)],
+        s,
+    );
+    p.line_segment(
+        [egui::pos2(cx + 4.0, top + 3.5), egui::pos2(cx + 3.2, bottom)],
+        s,
+    );
+    p.line_segment(
+        [egui::pos2(cx - 3.2, bottom), egui::pos2(cx + 3.2, bottom)],
+        s,
+    );
+    // 内部两道竖纹
+    p.line_segment(
+        [egui::pos2(cx - 1.3, top + 6.0), egui::pos2(cx - 1.1, bottom - 2.5)],
+        s,
+    );
+    p.line_segment(
+        [egui::pos2(cx + 1.3, top + 6.0), egui::pos2(cx + 1.1, bottom - 2.5)],
+        s,
+    );
+}
+
+/// 扁平工具栏按钮：无边框，悬停出现淡色底；danger = 红色（删除类）
+fn tool_button(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    icon: ToolIcon,
+    danger: bool,
+) -> bool {
+    const ICON: f32 = 16.0;
+    const GAP: f32 = 7.0;
+    const PAD: f32 = 9.0;
+    const H: f32 = 30.0;
+    let font = egui::FontId::proportional(14.0);
+    // 先按中性色量一次宽度（颜色不影响字形度量）
+    let measured = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), Color32::BLACK);
+    let w = PAD * 2.0 + ICON + GAP + measured.size().x;
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(w, H), sense);
+    let hot = enabled && (response.hovered() || response.is_pointer_button_down_on());
+
+    let color = if !enabled {
+        Color32::from_rgb(170, 176, 186)
+    } else if danger {
+        Color32::from_rgb(208, 58, 58)
+    } else if hot {
+        Color32::from_rgb(35, 95, 200)
+    } else {
+        Color32::from_rgb(45, 50, 60)
+    };
+    if hot {
+        let bg = if danger {
+            Color32::from_rgb(253, 236, 236)
+        } else {
+            Color32::from_rgb(228, 234, 244)
+        };
+        ui.painter().rect_filled(rect, 5.0, bg);
+    }
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + PAD + ICON / 2.0, rect.center().y),
+        egui::vec2(ICON, ICON),
+    );
+    icon(ui.painter(), icon_rect, color);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, color);
+    ui.painter().galley(
+        egui::pos2(
+            icon_rect.right() + GAP,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        color,
+    );
+    if hot {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    enabled && response.clicked()
+}
+
+/// 折叠箭头：收缩为 > 形（collapsed=true），展开为 v 形。
+/// 分组标题与工具栏「更多」按钮共用，保证两处观感完全一致。
+fn draw_chevron(
+    p: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    collapsed: bool,
+    color: Color32,
+) {
+    let r = radius;
+    let (a, b, d) = if collapsed {
+        (
+            egui::pos2(center.x - r * 0.6, center.y - r),
+            egui::pos2(center.x + r * 0.6, center.y),
+            egui::pos2(center.x - r * 0.6, center.y + r),
+        )
+    } else {
+        (
+            egui::pos2(center.x - r, center.y - r * 0.6),
+            egui::pos2(center.x, center.y + r * 0.6),
+            egui::pos2(center.x + r, center.y - r * 0.6),
+        )
+    };
+    let stroke = egui::Stroke::new(2.0_f32, color);
+    p.line_segment([a, b], stroke);
+    p.line_segment([b, d], stroke);
+}
+
+/// 自绘按钮驱动的下拉菜单：等同 `egui::menu::menu_custom_button`，
+/// 但按钮完全由我们手绘（以便复用与分组标题一致的箭头形状）。
+fn custom_menu_button<R>(
+    ui: &mut egui::Ui,
+    button: impl FnOnce(&mut egui::Ui) -> egui::Response,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::Response {
+    let bar_id = ui.id();
+    let mut bar_state = egui::menu::BarState::load(ui.ctx(), bar_id);
+    let button_response = button(ui);
+    bar_state.bar_menu(&button_response, add_contents);
+    bar_state.store(ui.ctx(), bar_id);
+    button_response
+}
+
+/// 工具栏「更多」：扁平「文字 + V 形箭头」，箭头与分组标题同款
+fn more_menu_button(ui: &mut egui::Ui) -> egui::Response {
+    const PAD: f32 = 9.0;
+    const GAP: f32 = 7.0;
+    const ARROW: f32 = 11.0;
+    const H: f32 = 30.0;
+    let font = egui::FontId::proportional(14.0);
+    let measured = ui
+        .painter()
+        .layout_no_wrap("更多".to_owned(), font.clone(), Color32::BLACK);
+    let w = PAD * 2.0 + measured.size().x + GAP + ARROW;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(w, H), egui::Sense::click());
+    let hot = response.hovered() || response.is_pointer_button_down_on();
+    let color = if hot {
+        Color32::from_rgb(35, 95, 200)
+    } else {
+        Color32::from_rgb(45, 50, 60)
+    };
+    if hot {
+        ui.painter().rect_filled(
+            rect,
+            5.0,
+            Color32::from_rgb(228, 234, 244),
+        );
+    }
+    let galley = ui.painter().layout_no_wrap("更多".to_owned(), font, color);
+    ui.painter().galley(
+        egui::pos2(
+            rect.left() + PAD,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        color,
+    );
+    draw_chevron(
+        ui.painter(),
+        egui::pos2(rect.right() - PAD - ARROW / 2.0, rect.center().y),
+        4.5,
+        false,
+        color,
+    );
+    if hot {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
 }
